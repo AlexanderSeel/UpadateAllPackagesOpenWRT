@@ -1,0 +1,23 @@
+{
+  "luci-app-openwrt-updater": {
+    "description": "Grant access to the OpenWrt Package Updater",
+    "read": {
+      "ubus": {
+        "luci.openwrt_updater": [
+          "status",
+          "list_upgrades",
+          "job_status"
+        ]
+      }
+    },
+    "write": {
+      "ubus": {
+        "luci.openwrt_updater": [
+          "refresh",
+          "start_upgrade",
+          "reboot"
+        ]
+      }
+    }
+  }
+}

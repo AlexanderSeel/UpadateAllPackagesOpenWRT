@@ -1,0 +1,147 @@
+name: Build and release OpenWrt packages
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PACKAGE_NAME: luci-app-openwrt-updater
+  VERSION: 1.0.0
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - openwrt: "25.12.5"
+            format: apk
+            sdk_url: https://downloads.openwrt.org/releases/25.12.5/targets/x86/64/openwrt-sdk-25.12.5-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst
+            sdk_sha256: 0c8df0151a1e88feb7c03d694d61f6a18d51872815b7c811d76e2b77504d5e9c
+          - openwrt: "24.10.8"
+            format: ipk
+            sdk_url: https://downloads.openwrt.org/releases/24.10.8/targets/x86/64/openwrt-sdk-24.10.8-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+            sdk_sha256: ac4a0405d2eea821b06f93c14ba13ffa90ad0457648903df7dde02570027ab21
+
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang flex bison g++ gawk \
+            gcc-multilib gettext git libncurses-dev libssl-dev python3-setuptools \
+            rsync swig unzip zlib1g-dev file wget zstd
+
+      - name: Download and verify OpenWrt SDK
+        run: |
+          wget -O sdk.tar.zst "${{ matrix.sdk_url }}"
+          echo "${{ matrix.sdk_sha256 }}  sdk.tar.zst" | sha256sum -c -
+          mkdir sdk
+          tar --zstd -xf sdk.tar.zst -C sdk --strip-components=1
+
+      - name: Prepare package
+        run: |
+          mkdir -p sdk/package/${PACKAGE_NAME}
+          rsync -a \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude 'sdk' \
+            ./ sdk/package/${PACKAGE_NAME}/
+
+      - name: Prepare SDK metadata
+        working-directory: sdk
+        run: |
+          ./scripts/feeds update luci
+          ./scripts/feeds install luci-base
+          make defconfig
+
+      - name: Build package
+        working-directory: sdk
+        run: make package/${PACKAGE_NAME}/compile V=s -j2
+
+      - name: Collect package
+        id: collect
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="$(find sdk/bin -type f -name "${PACKAGE_NAME}*.${{ matrix.format }}" | head -n 1)"
+          test -n "$FILE"
+          mkdir -p dist
+          cp "$FILE" "dist/"
+          echo "file=dist/$(basename "$FILE")" >> "$GITHUB_OUTPUT"
+          ls -lh dist/
+
+      - name: Validate APK v3 package
+        if: matrix.format == 'apk'
+        run: |
+          set -euo pipefail
+          APK_TOOL="$(find sdk/staging_dir/host -type f -path '*/bin/apk' -perm -111 | head -n 1)"
+          test -x "$APK_TOOL"
+          mkdir -p apk-validation
+          "$APK_TOOL" mkndx \
+            --root "$PWD/sdk" \
+            --keys-dir "$PWD/sdk" \
+            --allow-untrusted \
+            --output apk-validation/packages.adb \
+            "${{ steps.collect.outputs.file }}"
+          test -s apk-validation/packages.adb
+
+      - name: Validate IPK archive
+        if: matrix.format == 'ipk'
+        run: |
+          file "${{ steps.collect.outputs.file }}"
+          ar t "${{ steps.collect.outputs.file }}" | grep -q control.tar
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-${{ matrix.openwrt }}-${{ matrix.format }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create source archive
+        run: |
+          git archive --format=zip \
+            --output "release-assets/${PACKAGE_NAME}-${VERSION}-source.zip" \
+            HEAD
+
+      - name: Checksums
+        working-directory: release-assets
+        run: sha256sum * > SHA256SUMS
+
+      - name: Create release if version is new
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; build artifacts remain available on the workflow run."
+            exit 0
+          fi
+
+          gh release create "$TAG" \
+            --target "${GITHUB_SHA}" \
+            --title "OpenWrt Package Updater ${TAG}" \
+            --notes-file CHANGELOG.md \
+            release-assets/*

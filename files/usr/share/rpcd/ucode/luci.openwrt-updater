@@ -1,0 +1,30 @@
+#!/usr/bin/ucode
+
+'use strict';
+
+import { popen } from 'fs';
+
+const backend = '/usr/libexec/openwrt-updater-backend';
+
+function run(action) {
+	const fd = popen(backend + ' ' + action + ' 2>&1');
+
+	if (!fd)
+		return { code: 127, stdout: 'Unable to execute updater backend' };
+
+	const output = fd.read('all') || '';
+	const code = fd.close();
+
+	return { code: code, stdout: output };
+}
+
+const methods = {
+	status: { call: function(req) { return run('status'); } },
+	list_upgrades: { call: function(req) { return run('list'); } },
+	job_status: { call: function(req) { return run('job-status'); } },
+	refresh: { call: function(req) { return run('refresh'); } },
+	start_upgrade: { call: function(req) { return run('start-upgrade'); } },
+	reboot: { call: function(req) { return run('reboot'); } }
+};
+
+return { 'luci.openwrt_updater': methods };

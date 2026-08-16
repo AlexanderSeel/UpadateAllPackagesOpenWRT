@@ -2,34 +2,34 @@
 
 A small LuCI application that adds **System → Package Updater**.
 
-It detects the package manager automatically:
+It automatically detects the package manager:
 
 - OpenWrt **25.12+**: `apk`
 - OpenWrt **24.10 and older**: `opkg`
 
 ## Features
 
-- Shows OpenWrt release, kernel, package manager and overlay filesystem usage.
+- Shows the OpenWrt release, kernel, package manager, and overlay filesystem usage.
 - Lists pending package upgrades.
 - Refreshes package indexes.
-- Runs a bulk package upgrade only after an explicit warning/confirmation.
-- Runs the upgrade in the background and displays a live log in LuCI.
+- Runs a bulk package upgrade only after an explicit warning and confirmation.
+- Runs upgrades in the background and shows a live log in LuCI.
 - Provides a reboot action with confirmation.
 - Uses a narrow rpcd/ucode API; the browser cannot submit arbitrary shell commands.
-- Architecture independent (`PKGARCH:=all`).
+- Architecture independent (`LUCI_PKGARCH:=all`).
 
 ## Important warning
 
-OpenWrt explicitly warns against blindly mass-upgrading packages with `apk upgrade`
-or `opkg upgrade`. The supported way to update the complete base system, kernel and
-firmware is **sysupgrade / Attended Sysupgrade / owut**.
+OpenWrt discourages blindly mass-upgrading base-system packages with `apk upgrade`
+or repeated `opkg upgrade`. For the complete base system, kernel, and firmware,
+use **sysupgrade / Attended Sysupgrade / owut**.
 
-This application exists for cases where you intentionally want package-level upgrades,
-but it keeps that warning visible before execution.
+This application is intended for cases where you deliberately want package-level
+upgrades and keeps the warning visible before execution.
 
 ## Install
 
-Download the correct artifact from the GitHub Release.
+Download the package matching your OpenWrt release from the GitHub Release.
 
 ### OpenWrt 25.12+
 
@@ -39,8 +39,8 @@ Use the `.apk` built by the official OpenWrt 25.12 SDK:
 apk add --allow-untrusted ./luci-app-openwrt-updater-*.apk
 ```
 
-The `--allow-untrusted` option is required for locally built packages that are not
-signed by an OpenWrt repository key.
+`--allow-untrusted` is required because this project package is not signed by an
+official OpenWrt repository key.
 
 ### OpenWrt 24.10 and older
 
@@ -54,38 +54,35 @@ After installation, open LuCI and navigate to:
 
 **System → Package Updater**
 
-If the entry is not immediately visible, log out/in or restart `rpcd`.
+If the entry does not immediately appear, log out/in to LuCI or restart `rpcd`.
 
-## Build
+## Build from source
 
-This repository uses a normal OpenWrt `package.mk` recipe. Copy/clone it into the
-matching OpenWrt SDK as:
-
-```text
-package/luci-app-openwrt-updater/
-```
-
-Then run:
+With the matching OpenWrt SDK:
 
 ```sh
+./scripts/feeds update luci
+./scripts/feeds install luci-base
+mkdir -p package/luci-app-openwrt-updater
+# copy this repository into package/luci-app-openwrt-updater/
 make defconfig
 make package/luci-app-openwrt-updater/compile V=s
 ```
 
 The package format is selected by the SDK:
 
-- 25.12 SDK → `.apk`
-- 24.10 SDK → `.ipk`
+- OpenWrt 25.12 SDK → `.apk`
+- OpenWrt 24.10 SDK → `.ipk`
+
+The package recipe uses the LuCI build helper at `$(TOPDIR)/feeds/luci/luci.mk`.
 
 ## Releases
 
-`.github/workflows/release.yml` builds both package formats with official OpenWrt SDKs.
-The workflow verifies the SDK SHA-256 values before extraction and validates the generated
-APK by creating an APK v3 package index with the SDK's own `apk` tool.
+`.github/workflows/release.yml` builds both package formats with official OpenWrt SDKs, verifies SDK SHA-256 checksums, validates the generated package formats, and publishes the `.apk`, `.ipk`, source archive, and `SHA256SUMS`.
 
 ## Security model
 
-The LuCI ACL exposes only fixed RPC methods:
+The LuCI ACL exposes only fixed RPC methods.
 
 Read:
 - `status`
@@ -97,7 +94,18 @@ Write:
 - `start_upgrade`
 - `reboot`
 
-There is no generic "execute shell command" RPC endpoint.
+There is no generic shell-execution RPC endpoint.
+
+## Package layout
+
+```text
+Makefile
+htdocs/luci-static/resources/view/openwrt-updater.js
+root/usr/libexec/openwrt-updater-backend
+root/usr/share/luci/menu.d/luci-app-openwrt-updater.json
+root/usr/share/rpcd/acl.d/luci-app-openwrt-updater.json
+root/usr/share/rpcd/ucode/luci.openwrt-updater
+```
 
 ## License
 

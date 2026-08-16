@@ -1,0 +1,15 @@
+{
+  "admin/system/openwrt-updater": {
+    "title": "Package Updater",
+    "order": 31,
+    "action": {
+      "type": "view",
+      "path": "openwrt-updater"
+    },
+    "depends": {
+      "acl": [
+        "luci-app-openwrt-updater"
+      ]
+    }
+  }
+}

@@ -1,0 +1,148 @@
+#!/bin/sh
+
+STATE_FILE="/tmp/openwrt-updater.state"
+LOG_FILE="/tmp/openwrt-updater.log"
+
+detect_manager() {
+	if command -v apk >/dev/null 2>&1; then
+		echo apk
+	elif command -v opkg >/dev/null 2>&1; then
+		echo opkg
+	else
+		echo none
+	fi
+}
+
+refresh_indexes() {
+	case "$(detect_manager)" in
+		apk) apk update ;;
+		opkg) opkg update ;;
+		*) echo "Neither apk nor opkg is available." >&2; return 127 ;;
+	esac
+}
+
+list_upgrades() {
+	case "$(detect_manager)" in
+		apk) apk list --upgradable 2>/dev/null || true ;;
+		opkg) opkg list-upgradable 2>/dev/null || true ;;
+		*) return 127 ;;
+	esac
+}
+
+upgrade_all() {
+	case "$(detect_manager)" in
+		apk)
+			apk upgrade
+			;;
+		opkg)
+			packages="$(opkg list-upgradable | awk '{print $1}')"
+			[ -n "$packages" ] || {
+				echo "No packages need upgrading."
+				return 0
+			}
+
+			for pkg in $packages; do
+				echo
+				echo "===== Upgrading $pkg ====="
+				opkg upgrade "$pkg" || return $?
+			done
+			;;
+		*)
+			echo "Neither apk nor opkg is available." >&2
+			return 127
+			;;
+	esac
+}
+
+case "$1" in
+	status)
+		manager="$(detect_manager)"
+		release="$(. /etc/openwrt_release 2>/dev/null; echo "${DISTRIB_DESCRIPTION:-OpenWrt}")"
+		kernel="$(uname -r 2>/dev/null)"
+		overlay="$(df -h /overlay 2>/dev/null | tail -n 1)"
+		[ -n "$overlay" ] || overlay="$(df -h / 2>/dev/null | tail -n 1)"
+		state="$(cat "$STATE_FILE" 2>/dev/null || echo idle)"
+
+		printf 'manager=%s\n' "$manager"
+		printf 'release=%s\n' "$release"
+		printf 'kernel=%s\n' "$kernel"
+		printf 'overlay=%s\n' "$overlay"
+		printf 'state=%s\n' "$state"
+		;;
+
+	list)
+		list_upgrades
+		;;
+
+	refresh)
+		[ "$(cat "$STATE_FILE" 2>/dev/null)" != "running" ] || {
+			echo "An upgrade job is already running." >&2
+			exit 2
+		}
+		refresh_indexes
+		;;
+
+	job-status)
+		printf 'state=%s\n' "$(cat "$STATE_FILE" 2>/dev/null || echo idle)"
+		echo "---LOG---"
+		cat "$LOG_FILE" 2>/dev/null || true
+		;;
+
+	start-upgrade)
+		[ "$(cat "$STATE_FILE" 2>/dev/null)" != "running" ] || {
+			echo "An upgrade job is already running." >&2
+			exit 2
+		}
+
+		: > "$LOG_FILE"
+		echo running > "$STATE_FILE"
+
+		(
+			echo "OpenWrt Package Updater"
+			echo "Started: $(date)"
+			echo "Package manager: $(detect_manager)"
+			echo
+			echo "Refreshing package indexes..."
+
+			refresh_indexes
+			rc=$?
+			if [ "$rc" -ne 0 ]; then
+				echo
+				echo "Package index refresh failed (exit $rc)."
+				echo failed > "$STATE_FILE"
+				exit "$rc"
+			fi
+
+			echo
+			echo "Upgradeable packages before upgrade:"
+			list_upgrades
+			echo
+			echo "Starting package upgrades..."
+
+			upgrade_all
+			rc=$?
+			if [ "$rc" -eq 0 ]; then
+				echo
+				echo "Upgrade completed successfully: $(date)"
+				echo done > "$STATE_FILE"
+			else
+				echo
+				echo "Upgrade failed with exit code $rc: $(date)"
+				echo failed > "$STATE_FILE"
+				exit "$rc"
+			fi
+		) >> "$LOG_FILE" 2>&1 &
+
+		echo "Upgrade job started."
+		;;
+
+	reboot)
+		(sleep 2; reboot) >/dev/null 2>&1 &
+		echo "Router reboot scheduled."
+		;;
+
+	*)
+		echo "Usage: $0 {status|list|refresh|job-status|start-upgrade|reboot}" >&2
+		exit 2
+		;;
+esac
